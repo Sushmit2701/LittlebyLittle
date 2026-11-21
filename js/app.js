@@ -34,6 +34,21 @@ const SHORT_DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // ---------- state helpers ----------
 
 const persist = () => save(state);
+
+// Each task and habit keeps its own colour, like the coloured tiles in a clay deck.
+const TINTS = ['pink', 'amber', 'green', 'blue', 'violet'];
+// new tasks and habits take the next colour in turn, so neighbours rarely match
+function nextTint() {
+  const used = [...state.tasks, ...state.habits].map((x) => x.tint).filter(Boolean);
+  return TINTS[used.length % TINTS.length];
+}
+function tint(id) {
+  const owner = state.tasks.find((t) => t.id === id) || state.habits.find((h) => h.id === id);
+  if (owner?.tint) return `--c:var(--${owner.tint})`;
+  let h = 0;
+  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `--c:var(--${TINTS[h % TINTS.length]})`;
+}
 function replan() {
   plan(state, today);
   persist();
@@ -107,15 +122,17 @@ function fitNote(t) {
   </div>`;
 }
 
-function ring(done, total, size = 84) {
-  const r = size / 2 - 7;
+const GRADIENT = (id) => `<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--pink)"/><stop offset="1" stop-color="var(--amber)"/></linearGradient></defs>`;
+
+function ring(done, total, size = 96) {
+  const r = size / 2 - 12;
   const circ = 2 * Math.PI * r;
   const frac = total ? done / total : 0;
   const label = total ? `${Math.round(frac * 100)}%<small>of today</small>` : `Free<small>today</small>`;
   return `<div class="ring" role="img" aria-label="${total ? `${Math.round(frac * 100)} percent of today done` : 'Nothing planned today'}">
-    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true">
+    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true">${GRADIENT('g-day')}
       <circle class="track" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke-width="7"/>
-      <circle class="fill" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke-width="7" stroke-linecap="round"
+      <circle class="fill" stroke="url(#g-day)" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke-width="7" stroke-linecap="round"
         stroke-dasharray="${circ}" stroke-dashoffset="${circ * (1 - frac)}" ${frac === 0 ? 'opacity="0"' : ''}/>
     </svg>
     <span class="ring-label">${label}</span>
@@ -161,7 +178,7 @@ function renderToday() {
   } else {
     list = `<ul class="items">
       ${items.map(({ t, c, time }) => `
-        <li class="card item ${c.done ? 'is-done' : ''}">
+        <li class="card item ${c.done ? 'is-done' : ''}" style="${tint(t.id)}">
           <button class="tick" data-act="tick" data-id="${c.id}" aria-pressed="${!!c.done}" aria-label="${c.done ? 'Mark not done' : 'Mark done'}: ${esc(t.name)}">${CHECK}</button>
           <div class="item-body">
             <p class="item-title">${esc(t.name)} ${t.priority === 'high' ? '<span class="badge">High</span>' : ''}</p>
@@ -173,7 +190,7 @@ function renderToday() {
           </div>
         </li>`).join('')}
       ${habits.map((h) => `
-        <li class="card item ${h.log?.[today] ? 'is-done' : ''}">
+        <li class="card item ${h.log?.[today] ? 'is-done' : ''}" style="${tint(h.id)}">
           <button class="tick" data-act="habit-tick" data-id="${h.id}" aria-pressed="${!!h.log?.[today]}" aria-label="${h.log?.[today] ? 'Mark not done' : 'Mark done'}: ${esc(h.name)}">${CHECK}</button>
           <div class="item-body">
             <p class="item-title">${esc(h.name)}</p>
@@ -334,7 +351,7 @@ async function parseInput() {
 function createTask(d) {
   const t = {
     id: uid(), name: d.name.trim(), deadline: d.deadline, totalMinutes: +d.minutes,
-    chunkSize: +d.chunkSize, priority: d.priority, createdAt: today, chunks: [],
+    chunkSize: +d.chunkSize, priority: d.priority, createdAt: today, chunks: [], tint: nextTint(),
   };
   t.chunks = buildChunks(t.totalMinutes, t.chunkSize);
   state.tasks.push(t);
@@ -412,7 +429,7 @@ function renderTasks() {
   const card = (t) => {
     const left = t.chunks.filter((c) => !c.done);
     const next = left.map((c) => c.date).filter(Boolean).sort()[0];
-    return `<button class="card task" data-act="open-task" data-id="${t.id}">
+    return `<button class="card task" data-act="open-task" data-id="${t.id}" style="${tint(t.id)}">
       <div class="task-top">
         <span class="task-name">${esc(t.name)} ${t.priority === 'high' ? '<span class="badge">High</span>' : ''}${t.unplaced ? ' <span class="badge badge-warm">Needs room</span>' : ''}</span>
         <span class="task-due">${left.length ? `Due ${D.fmtDay(t.deadline)}` : 'Finished'}</span>
@@ -423,7 +440,7 @@ function renderTasks() {
   };
   const habitCard = (h) => {
     const days = WEEK.filter((d) => h.days.includes(d)).map((d) => SHORT_DAY[d]).join(', ');
-    return `<button class="card task" data-act="open-habit" data-id="${h.id}">
+    return `<button class="card task" data-act="open-habit" data-id="${h.id}" style="${tint(h.id)}">
       <div class="task-top"><span class="task-name">${esc(h.name)}</span><span class="task-due">${h.minutes} min</span></div>
       <div class="task-meta"><span>${days}</span></div>
     </button>`;
@@ -431,7 +448,7 @@ function renderTasks() {
   return `
     <div class="section-head"><h1>All tasks</h1></div>
     ${open.length ? open.map(card).join('') : `<div class="card empty"><h2>No tasks waiting</h2><p class="muted">Nice and clear.</p><a class="btn btn-primary" href="#add">Add a task</a></div>`}
-    ${open.length ? `<button class="btn btn-block" data-act="export-all">Add upcoming chunks to calendar (.ics)</button>` : ''}
+    ${open.length ? `<button class="btn btn-block" data-act="export-all">Add all upcoming to calendar</button>` : ''}
     <div class="section-head"><h2>Little habits</h2><button class="btn btn-sm btn-quiet" data-act="new-habit">Add a habit</button></div>
     ${state.habits.length ? state.habits.map(habitCard).join('') : '<p class="muted small">Small things you’d like a bit of each week, like the gym three times or 20 minutes of your course. They show up in Today on their days.</p>'}
     ${finished.length ? `<div class="section-head"><h2>Finished</h2></div>${finished.map(card).join('')}` : ''}`;
@@ -483,7 +500,7 @@ function taskSheet() {
     </form>
     <div class="stack" style="margin-top:24px">
       <h3>Chunks</h3>
-      <ul class="chunk-list">${chunks}</ul>
+      <ul class="chunk-list" style="${tint(t.id)}">${chunks}</ul>
     </div>
     <div style="margin-top:20px">
       ${ui.confirmDelete
@@ -527,7 +544,7 @@ function saveHabit() {
   if (!h.name.trim()) return toast('Give the habit a name first.');
   if (!h.days.length) return toast('Pick at least one day.');
   const existing = state.habits.find((x) => x.id === h.id);
-  const data = { id: h.id, name: h.name.trim(), minutes: +h.minutes, days: [...h.days], log: existing?.log || {} };
+  const data = { id: h.id, name: h.name.trim(), minutes: +h.minutes, days: [...h.days], log: existing?.log || {}, tint: existing?.tint || nextTint() };
   if (existing) Object.assign(existing, data); else state.habits.push(data);
   persist();
   closeSheet();
@@ -624,9 +641,10 @@ function drawTimer() {
     <h2>${esc(timer.title)}</h2>
     <p class="muted">${esc(timer.sub)}</p>
     <div class="timer-ring">
-      <svg viewBox="0 0 280 280" aria-hidden="true">
+      <svg viewBox="0 0 280 280" aria-hidden="true">${GRADIENT('g-timer')}
+        <circle class="ticks" cx="140" cy="140" r="${r - 20}" fill="none" stroke-width="10" stroke-dasharray="1.2 5.6"/>
         <circle class="track" cx="140" cy="140" r="${r}" fill="none" stroke-width="10"/>
-        <circle class="fill" id="timer-fill" cx="140" cy="140" r="${r}" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ * (1 - left / timer.total)}"/>
+        <circle class="fill" stroke="url(#g-timer)" id="timer-fill" cx="140" cy="140" r="${r}" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ * (1 - left / timer.total)}"/>
       </svg>
       <span class="timer-time" id="timer-time" role="timer">${mmss(left)}</span>
     </div>
@@ -639,6 +657,7 @@ function drawTimer() {
            <button class="btn" data-act="timer-close">Stop</button>
          </div>`}
   </div>`;
+  el.setAttribute('style', tint(timer.kind === 'habit' ? timer.id : findChunk(timer.id).t?.id));
   el.hidden = false;
 }
 
