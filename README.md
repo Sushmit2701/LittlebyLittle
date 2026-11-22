@@ -23,6 +23,23 @@ python3 -m http.server 8080
 
 Then open http://localhost:8080. Run the tests with `npm test` (Node 20 or newer, no packages to install).
 
+## Sync between iPhone, iPad and Mac
+
+Sync is optional. It uses the **same free Supabase project as Bibliophile**, so you sign in with the same account. Daily Chunker keeps its data in its own table and never touches your books.
+
+**One-time setup in Supabase (about 3 minutes):**
+
+1. Open your project at [supabase.com](https://supabase.com) → **SQL Editor** → **New query**.
+2. Copy everything from [`supabase/chunker.sql`](supabase/chunker.sql), paste it in, and press **Run**. It's safe to run again.
+3. Open **Authentication → URL Configuration → Redirect URLs** → **Add URL**, and add:
+   `https://sushmit2701.github.io/LittlebyLittle/**`
+
+**On each device:** open the app → **Settings** (top right) → **Sync across devices** → enter your email → **Email me a code**, then type the code. If Google sign-in is switched on for Bibliophile, **Continue with Google** works too.
+
+> On iPhone and iPad, a sign-in *link* opens in Safari rather than the home-screen app, so type the **code** from the email, or use Google. (Bibliophile's setup notes explain how to put the code in the email.)
+
+What syncs: tasks, ticked chunks, habits and settings. Your Anthropic key and light/dark choice stay on each device. If a task is changed on two devices, the later change wins, but a chunk ticked on any device stays ticked. Offline changes sync when you're back online. Signing out keeps everything on that device.
+
 ## What it does
 
 **Three screens**
@@ -61,6 +78,8 @@ Paste an Anthropic API key in Settings and dictation is read by Claude, and chun
 | `js/parser.js` | Reads dictated text: names, deadlines, durations |
 | `js/ics.js` | Calendar file export |
 | `js/ai.js` | Optional Claude calls |
+| `js/cloud.js`, `js/sync-merge.js`, `js/cloud-config.js` | Optional sign-in and sync (Supabase) |
+| `supabase/chunker.sql` | The sync table and its security rules |
 | `js/store.js`, `js/dates.js` | Saved data and date helpers |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Home-screen install and offline use |
 | `tests/` | Tests for the scheduler, parser and calendar file |

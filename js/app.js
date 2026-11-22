@@ -7,6 +7,7 @@ import {
 import { parseDictation } from './parser.js';
 import { buildICS, deliverICS } from './ics.js';
 import { aiParse, aiSteps } from './ai.js';
+import * as Cloud from './cloud.js';
 
 let state = load();
 let today = D.todayStr();
@@ -584,11 +585,42 @@ function prefsSheet() {
       </div>
       <div class="stack" style="gap:8px"><span class="field">Default chunk size</span>${seg('pref-chunk', s.defaultChunk, [[10, '10 min'], [30, '30 min']])}</div>
       <div class="stack" style="gap:8px"><span class="field">Appearance</span>${seg('pref-theme', s.theme, [['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']])}</div>
+      ${syncSection()}
       <label class="field">Anthropic API key (optional)
         <input class="input" type="password" id="p-ai" data-pref="aiKey" value="${esc(s.aiKey)}" placeholder="sk-ant-…" autocomplete="off">
         <span class="small muted" style="font-weight:400">With a key, dictation is read by Claude and chunks get step names like “Collect data”. The key stays on this phone and is only sent to Anthropic.</span>
       </label>
     </div>`);
+}
+
+function syncSection() {
+  const st = Cloud.getStatus();
+  if (!st.available) return '';
+  const when = st.lastSync ? new Date(st.lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+  let body;
+  if (st.signedIn) {
+    body = `<p>Signed in as <b>${esc(st.email)}</b>.</p>
+      <p class="small muted">${st.syncing ? 'Syncing…' : st.error ? esc(st.error) : when ? `Last synced at ${when}.` : 'Getting ready…'}</p>
+      <div class="row"><button class="btn btn-sm" data-act="sync-now">Sync now</button><button class="btn-text" data-act="sync-signout">Sign out</button></div>`;
+  } else if (st.pendingEmail) {
+    body = `<p class="small">We emailed a code to <b>${esc(st.pendingEmail)}</b>. Type it here, or tap the link in the email.</p>
+      <form id="code-form" class="row"><input class="input" id="sync-code" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="Code" style="flex:1;min-width:8rem"><button class="btn btn-primary btn-sm" type="submit">Sign in</button></form>
+      <button class="btn-text" data-act="sync-cancel">Use a different email</button>`;
+  } else {
+    body = `<p class="small muted" style="font-weight:400">Sign in with the same account as Bibliophile and your tasks, ticks and habits follow you between iPhone, iPad and Mac.</p>
+      <form id="email-form" class="row"><input class="input" id="sync-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" style="flex:1;min-width:12rem"><button class="btn btn-sm" type="submit">Email me a code</button></form>
+      ${st.google ? '<button class="btn btn-block" data-act="sync-google">Continue with Google</button>' : ''}
+      ${st.error ? `<p class="small muted">${esc(st.error)}</p>` : ''}`;
+  }
+  return `<div class="stack" id="sync-box" style="gap:10px"><span class="field">Sync across devices</span>${body}</div>`;
+}
+
+function refreshSyncBox() {
+  const box = document.getElementById('sync-box');
+  if (!box || $('#sheet').hidden) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = syncSection();
+  if (tmp.firstElementChild) box.replaceWith(tmp.firstElementChild);
 }
 
 function setPref(key, value, replanNeeded = true) {
@@ -893,6 +925,10 @@ const actions = {
     toast('Dates added. The plan has been rebalanced.');
     prefsSheet();
   },
+  'sync-now'() { Cloud.syncNow(); },
+  async 'sync-signout'() { await Cloud.signOut(); toast('Signed out. Everything stays on this device.'); },
+  'sync-cancel'() { Cloud.cancelEmail(); },
+  'sync-google'() { Cloud.signInWithGoogle(); },
   'pref-remove-off'(el) {
     setPref('unavailableDates', state.settings.unavailableDates.filter((d) => d !== el.dataset.v));
     prefsSheet();
@@ -915,6 +951,13 @@ document.addEventListener('submit', (e) => {
   if (form.dataset.draft != null) submitDraft(+form.dataset.draft);
   else if (form.id === 'task-form') saveTask();
   else if (form.id === 'habit-form') saveHabit();
+  else if (form.id === 'email-form') {
+    const btn = form.querySelector('button');
+    btn.disabled = true;
+    Cloud.sendEmailCode(form.email.value).then(() => toast('Code sent. Check your email.')).catch((err) => { toast(err.message); btn.disabled = false; });
+  } else if (form.id === 'code-form') {
+    Cloud.verifyEmailCode(form.code.value).then((r) => toast(`Signed in as ${r.email}. Syncing now.`)).catch((err) => toast(err.message));
+  }
 });
 
 document.addEventListener('input', (e) => {
@@ -956,7 +999,7 @@ document.addEventListener('keydown', (e) => {
   else if (!$('#sheet').hidden) closeSheet();
 });
 
-$('#open-prefs').addEventListener('click', prefsSheet);
+$('#open-prefs').addEventListener('click', () => { prefsSheet(); Cloud.loadProviders(); });
 window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
@@ -969,6 +1012,16 @@ setInterval(() => { if (dayCheck()) render(); }, 60000);
 applyTheme();
 dayCheck();
 render();
+
+Cloud.init({
+  getState: () => state,
+  // something arrived from another device: re-plan around it and redraw
+  onPulled: () => { replan(); render(); if (ui.editing?.id && !$('#sheet').hidden && taskById(ui.editing.id)) taskSheet(); },
+  onStatus: refreshSyncBox,
+});
+if (Cloud.isRedirect()) {
+  Cloud.handleRedirect().then((r) => { if (r) toast(r.ok ? `Signed in as ${r.email}. Syncing now.` : r.message); render(); });
+}
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

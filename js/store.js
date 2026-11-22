@@ -41,11 +41,17 @@ export function load() {
   }
 }
 
+const listeners = [];
+/** Called after every save (sync uses this to notice changes). */
+export const onSave = (fn) => listeners.push(fn);
+
 export function save(state) {
+  let ok = true;
   try {
     localStorage.setItem(KEY, JSON.stringify(state));
-    return true;
   } catch {
-    return false;
+    ok = false;
   }
+  for (const fn of listeners) { try { fn(); } catch { /* a listener must never break saving */ } }
+  return ok;
 }
