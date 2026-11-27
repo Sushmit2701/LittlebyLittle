@@ -59,6 +59,13 @@ What syncs: tasks, ticked chunks, habits and settings. Your Anthropic key and li
 - Today's plan never moves under you. *Too much today* moves that chunk to tomorrow or later, adds nothing new to today, and rebalances the rest.
 - If you skip a day, the missed chunks are quietly spread over the coming days the next time you open the app.
 
+**Focus timer and focus blocks (Pomodoro)**
+
+- Each chunk and habit has a *Start timer* button. The timer keeps the right time if you lock the phone or close the app, and the ⌄ button shrinks it to a small bar that follows you around the app.
+- Switch on **Focus blocks** (on the timer screen or in Settings) to work the Bibliophile way: focus for a set time (presets 25/5, 50/10, 90/15, or your own), then a soft "ting ting ting" starts a short break, and every few blocks the break is longer. When the break ends, a single ting rings and the next block starts by itself (or waits, if you prefer).
+- Break time never counts towards the chunk. A bar shows how much of the chunk you've done. When the chunk's time is reached, a ting offers *Mark done* or *Mark done, start the next chunk*, so one focus session can carry through several of today's chunks.
+- With notifications allowed, you're also alerted when the app is in the background (iPhone: from the home-screen app, iOS 16.4 or later).
+
 **Calendar**
 
 - *Add today's chunks to calendar* (Today screen) and *Add upcoming chunks to calendar* (All tasks) make a standard `.ics` file. On iPhone it opens the share sheet, or downloads the file; open it to add the events.

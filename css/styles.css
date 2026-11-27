@@ -298,3 +298,58 @@ select.input {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Focus blocks (Pomodoro) ---------- */
+.timer { overflow-y: auto; place-items: start center; }
+.timer-inner { margin: auto 0; padding-block: 8px 24px; width: 100%; }
+.timer-top { justify-self: stretch; display: flex; justify-content: flex-end; }
+.timer-time.paused { color: var(--muted); }
+.timer-ring.on-break .timer-time { color: var(--green); }
+.row.center { justify-content: center; }
+.chunk-progress { display: grid; gap: 8px; width: min(100%, 300px); }
+.chunk-progress .bar > span { transition: width .5s linear; }
+.timer .note { text-align: left; width: 100%; }
+
+.focus-card {
+  width: 100%; text-align: left; display: grid; gap: 14px;
+  background: var(--clay); box-shadow: var(--raise); border-radius: 22px; padding: 16px 18px;
+}
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; cursor: pointer; }
+.switch-row span { display: grid; gap: 2px; min-width: 0; }
+.switch-row small { color: var(--muted); font-size: .85rem; }
+/* a clay on/off switch */
+.switch {
+  appearance: none; -webkit-appearance: none; flex: none; margin: 0; cursor: pointer;
+  width: 58px; height: 32px; border-radius: 99px; background: var(--well); box-shadow: var(--inset-sm); position: relative;
+  transition: background .2s;
+}
+.switch::after {
+  content: ""; position: absolute; top: 4px; left: 4px; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--clay); box-shadow: 2px 2px 5px var(--lo), -1px -1px 3px var(--hi); transition: transform .2s;
+}
+.switch:checked { background: var(--navy); }
+.switch:checked::after { transform: translateX(26px); background: var(--bg); }
+.focus-custom { display: grid; gap: 10px; font-size: .92rem; font-weight: 700; }
+.focus-custom label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.focus-custom .input { width: 72px; min-height: 42px; padding: 8px 10px; text-align: center; }
+.check-row { display: flex; gap: 10px; align-items: center; font-size: .92rem; cursor: pointer; }
+.check-row input { width: 20px; height: 20px; accent-color: var(--navy); }
+
+/* the little timer bar that follows you around the app */
+.timer-bar {
+  position: fixed; z-index: 7; left: 50%; transform: translateX(-50%);
+  bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  width: min(calc(100% - 36px), 26rem); display: flex; align-items: center; gap: 8px;
+  background: var(--clay); box-shadow: var(--raise); border-radius: 20px; padding: 6px 12px 6px 6px;
+}
+.tb-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: none; cursor: pointer; padding: 8px; text-align: left; font-weight: 800; color: var(--ink); }
+.tb-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-time { font-variant-numeric: tabular-nums; color: var(--c); }
+.tb-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.tb-dot.live { background: var(--c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 22%, transparent); }
+.timer { display: block; }
+.timer-inner { margin: 0 auto; }
+.timer-ring { width: min(64vw, 250px); }
+.timer-time { font-size: 2.6rem; }
+.timer-bar:not([hidden]) ~ .toast { bottom: calc(164px + env(safe-area-inset-bottom, 0px)); }
+body:has(.timer-bar:not([hidden])) .view { padding-bottom: calc(200px + env(safe-area-inset-bottom, 0px)); }

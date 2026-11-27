@@ -585,6 +585,7 @@ function prefsSheet() {
       </div>
       <div class="stack" style="gap:8px"><span class="field">Default chunk size</span>${seg('pref-chunk', s.defaultChunk, [[10, '10 min'], [30, '30 min']])}</div>
       <div class="stack" style="gap:8px"><span class="field">Appearance</span>${seg('pref-theme', s.theme, [['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']])}</div>
+      <div class="stack" style="gap:8px"><span class="field">Focus timer</span>${focusPanel()}</div>
       ${syncSection()}
       <label class="field">Anthropic API key (optional)
         <input class="input" type="password" id="p-ai" data-pref="aiKey" value="${esc(s.aiKey)}" placeholder="sk-ant-…" autocomplete="off">
@@ -615,6 +616,12 @@ function syncSection() {
   return `<div class="stack" id="sync-box" style="gap:10px"><span class="field">Sync across devices</span>${body}</div>`;
 }
 
+// Redraw wherever the focus settings are showing (timer screen or Settings).
+function redrawFocus() {
+  if (timer) drawTimer();
+  if (!$('#sheet').hidden && $('#sheet-title')?.textContent === 'Settings') prefsSheet();
+}
+
 function refreshSyncBox() {
   const box = document.getElementById('sync-box');
   if (!box || $('#sheet').hidden) return;
@@ -628,91 +635,345 @@ function setPref(key, value, replanNeeded = true) {
   if (replanNeeded) replan(); else persist();
 }
 
-// ---------- Timer ----------
+// ---------- Focus timer ----------
+// Counts down a chunk. With Focus blocks on (Pomodoro, as in Bibliophile) you work in blocks: a soft
+// "ting ting ting" starts a short break, one "ting" ends it, and every few blocks the break is longer.
+// Break time never counts towards the chunk. Everything is based on timestamps and saved, so the timer
+// keeps the right time if you lock the phone or close the app.
+
+const FOCUS_PRESETS = { '25/5': { work: 25, brk: 5 }, '50/10': { work: 50, brk: 10 }, '90/15': { work: 90, brk: 15 } };
+const focusCfg = () => ({ on: false, work: 25, brk: 5, longBrk: 15, every: 4, auto: true, ...(state.settings.focus || {}) });
 
 let timer = null;
+let timerInterval = null;
 let wakeLock = null;
+let audioCtx = null;
 
-function chime() {
+function audio() {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    [523.25, 659.25].forEach((f, i) => {
+    audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch { /* sound is optional */ }
+  return audioCtx;
+}
+
+// A soft bell: "ting ting ting" to start a break, one "ting" to get going again.
+function bell(strikes = 3, gap = 0.8) {
+  const ctx = audio();
+  if (!ctx) return;
+  const out = ctx.createGain();
+  out.gain.value = 0.22;
+  out.connect(ctx.destination);
+  const partials = [[1, 1], [2.01, 0.45], [2.76, 0.28], [5.4, 0.12], [8.93, 0.05]]; // bell-like overtones
+  for (let i = 0; i < strikes; i++) {
+    const t0 = ctx.currentTime + 0.05 + i * gap;
+    const f0 = 988 * (i === strikes - 1 && strikes > 1 ? 0.89 : 1); // last strike a touch lower
+    for (const [ratio, amp] of partials) {
       const o = ctx.createOscillator();
       const g = ctx.createGain();
-      o.type = 'sine';
-      o.frequency.value = f;
-      const t0 = ctx.currentTime + i * 0.35;
+      o.frequency.value = f0 * ratio;
       g.gain.setValueAtTime(0.0001, t0);
-      g.gain.exponentialRampToValueAtTime(0.2, t0 + 0.05);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.2);
-      o.connect(g).connect(ctx.destination);
+      g.gain.exponentialRampToValueAtTime(amp, t0 + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 2.8 / Math.sqrt(ratio));
+      o.connect(g).connect(out);
       o.start(t0);
-      o.stop(t0 + 1.3);
-    });
-  } catch { /* sound is optional */ }
-  try { navigator.vibrate?.([120, 80, 120]); } catch { /* optional */ }
-}
-
-function startTimer({ id, kind, title, sub, minutes }) {
-  timer = { id, kind, title, sub, total: minutes * 60, endAt: Date.now() + minutes * 60000, pausedLeft: null, finished: false };
-  drawTimer();
-  timer.interval = setInterval(tickTimer, 500);
-  try { navigator.wakeLock?.request('screen').then((l) => (wakeLock = l)).catch(() => {}); } catch { /* optional */ }
-}
-
-const secondsLeft = () => (timer.pausedLeft != null ? timer.pausedLeft : Math.max(0, Math.round((timer.endAt - Date.now()) / 1000)));
-const mmss = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-
-function drawTimer() {
-  const el = $('#timer');
-  const left = secondsLeft();
-  const r = 130;
-  const circ = 2 * Math.PI * r;
-  el.innerHTML = `<div class="timer-inner">
-    <p class="eyebrow">${timer.finished ? 'Time’s up' : 'Just this bit'}</p>
-    <h2>${esc(timer.title)}</h2>
-    <p class="muted">${esc(timer.sub)}</p>
-    <div class="timer-ring">
-      <svg viewBox="0 0 280 280" aria-hidden="true">${GRADIENT('g-timer')}
-        <circle class="ticks" cx="140" cy="140" r="${r - 20}" fill="none" stroke-width="10" stroke-dasharray="1.2 5.6"/>
-        <circle class="track" cx="140" cy="140" r="${r}" fill="none" stroke-width="10"/>
-        <circle class="fill" stroke="url(#g-timer)" id="timer-fill" cx="140" cy="140" r="${r}" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ * (1 - left / timer.total)}"/>
-      </svg>
-      <span class="timer-time" id="timer-time" role="timer">${mmss(left)}</span>
-    </div>
-    ${timer.finished
-      ? `<p class="lede">How did it go?</p>
-         <div class="row" style="justify-content:center"><button class="btn btn-primary" data-act="timer-done">Mark it done</button><button class="btn" data-act="timer-close">Not quite, that’s fine</button></div>`
-      : `<div class="row" style="justify-content:center">
-           <button class="btn btn-quiet" data-act="timer-pause">${timer.pausedLeft != null ? 'Resume' : 'Pause'}</button>
-           <button class="btn btn-primary" data-act="timer-done">Finished early</button>
-           <button class="btn" data-act="timer-close">Stop</button>
-         </div>`}
-  </div>`;
-  el.setAttribute('style', tint(timer.kind === 'habit' ? timer.id : findChunk(timer.id).t?.id));
-  el.hidden = false;
-}
-
-function tickTimer() {
-  if (!timer || timer.finished) return;
-  const left = secondsLeft();
-  const t = $('#timer-time');
-  if (t) t.textContent = mmss(left);
-  const f = $('#timer-fill');
-  if (f) f.setAttribute('stroke-dashoffset', 2 * Math.PI * 130 * (1 - left / timer.total));
-  if (left <= 0) {
-    timer.finished = true;
-    chime();
-    drawTimer();
+      o.stop(t0 + 3);
+    }
   }
 }
 
+function notify(title, body) {
+  try { navigator.vibrate?.([180, 90, 180]); } catch { /* optional */ }
+  if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const opts = { body, icon: 'icons/icon-192.png', tag: 'chunker-focus', silent: true };
+  if (navigator.serviceWorker?.controller) navigator.serviceWorker.ready.then((r) => r.showNotification(title, opts)).catch(() => {});
+  else { try { new Notification(title, opts); } catch { /* not supported here */ } }
+}
+
+const focusedMs = () => (timer ? timer.elapsed + (timer.startedAt ? Date.now() - timer.startedAt : 0) : 0);
+const chunkLeft = () => timer.minutes * 60000 - focusedMs();
+function newFocus() {
+  const c = focusCfg();
+  return { work: c.work, brk: c.brk, longBrk: c.longBrk, every: c.every, auto: c.auto, round: 1, phase: 'work', blockStart: focusedMs() };
+}
+// Time left in the current focus block, or in the break.
+function focusLeft() {
+  const f = timer?.focus;
+  if (!f) return 0;
+  if (f.phase === 'break') return f.breakEndsAt - Date.now();
+  if (f.phase === 'breakover') return 0;
+  return f.work * 60000 - (focusedMs() - f.blockStart);
+}
+const isLongNext = (f) => f.round % f.every === 0;
+
+function saveTimer() {
+  state.timer = timer;
+  persist();
+}
+
+function keepAwake() {
+  clearInterval(timerInterval);
+  timerInterval = setInterval(tickTimer, 500);
+  try { if (!wakeLock) navigator.wakeLock?.request('screen').then((l) => (wakeLock = l)).catch(() => {}); } catch { /* optional */ }
+}
+
+function startTimer({ id, kind, title, sub, minutes }, carryFocus = null) {
+  audio(); // unlock sound while we have your tap
+  timer = { id, kind, title, sub, minutes, elapsed: 0, startedAt: Date.now(), focus: null, reached: false, finished: false, min: false };
+  if (carryFocus) timer.focus = carryFocus;
+  else if (focusCfg().on) timer.focus = newFocus();
+  keepAwake();
+  saveTimer();
+  drawTimer();
+  $('#timer').scrollTop = 0;
+}
+
+function startNextBlock() {
+  const f = timer?.focus;
+  if (!f) return;
+  if (f.phase === 'break') f.round += 1; // leaving a break (on time or skipped) starts the next block
+  f.phase = 'work';
+  delete f.breakEndsAt;
+  if (!timer.startedAt) timer.startedAt = Date.now();
+  f.blockStart = focusedMs();
+  saveTimer();
+  drawTimer();
+}
+
+function tickTimer() {
+  if (!timer) return;
+  const f = timer.focus;
+  if (f && f.phase === 'work' && timer.startedAt && focusLeft() <= 0) {
+    // Block finished. If the phone was locked past the bell, only the block itself counts.
+    const over = -focusLeft();
+    timer.elapsed += Date.now() - timer.startedAt - over;
+    timer.startedAt = null;
+    f.long = isLongNext(f);
+    f.breakLen = f.long ? f.longBrk : f.brk;
+    f.phase = 'break';
+    f.breakEndsAt = Date.now() - over + f.breakLen * 60000;
+    if (!timer.reached && chunkLeft() <= 0) timer.reached = true;
+    saveTimer();
+    bell(3);
+    notify('Time for a break', `${f.breakLen}-minute ${f.long ? 'long ' : ''}break. Stretch, look away, have some water.`);
+    drawTimer();
+    return;
+  }
+  if (f && f.phase === 'break' && focusLeft() <= 0) {
+    bell(1, 0);
+    notify('Break’s over', f.auto ? `Back to ${timer.title}.` : 'Start your next block when you’re ready.');
+    if (f.auto) startNextBlock();
+    else { f.round += 1; f.phase = 'breakover'; saveTimer(); drawTimer(); }
+    return;
+  }
+  if (f && !timer.reached && chunkLeft() <= 0) {
+    timer.reached = true;
+    saveTimer();
+    bell(1, 0);
+    notify(`${timer.minutes} minutes done`, 'That’s this chunk’s time. Mark it done when you’re ready.');
+    drawTimer();
+    return;
+  }
+  if (!f && !timer.finished && timer.startedAt && chunkLeft() <= 0) {
+    timer.elapsed = timer.minutes * 60000;
+    timer.startedAt = null;
+    timer.finished = true;
+    saveTimer();
+    bell(2);
+    notify('Time’s up', `${timer.title}: how did it go?`);
+    drawTimer();
+    return;
+  }
+  updateTimerFace();
+}
+
+const mmss = (ms) => {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+};
+
+// What the big clock shows, and how full the ring is.
+function face() {
+  const f = timer.focus;
+  if (f?.phase === 'break') return { ms: focusLeft(), frac: Math.max(0, focusLeft()) / (f.breakLen * 60000) };
+  if (f?.phase === 'breakover') return { ms: 0, frac: 0 };
+  if (f) return { ms: focusLeft(), frac: Math.max(0, focusLeft()) / (f.work * 60000) };
+  return { ms: chunkLeft(), frac: Math.max(0, chunkLeft()) / (timer.minutes * 60000) };
+}
+const chunkLine = () => `${Math.min(timer.minutes, Math.floor(focusedMs() / 60000))} of ${timer.minutes} min of this ${timer.kind === 'habit' ? 'habit' : 'chunk'}`;
+
+function updateTimerFace() {
+  if (!timer) return;
+  const { ms, frac } = face();
+  const t = $('#timer-time');
+  if (t) t.textContent = mmss(ms);
+  const fill = $('#timer-fill');
+  if (fill) fill.setAttribute('stroke-dashoffset', 2 * Math.PI * 130 * (1 - frac));
+  const line = $('#chunk-line');
+  if (line) line.textContent = chunkLine();
+  const bar = $('#chunk-bar');
+  if (bar) bar.style.width = `${Math.min(100, (100 * focusedMs()) / (timer.minutes * 60000))}%`;
+  const mini = $('#tb-time');
+  if (mini) mini.textContent = mmss(ms);
+}
+
+function focusPanel() {
+  const c = focusCfg();
+  const f = timer?.focus;
+  const on = f ? true : c.on;
+  const preset = Object.entries(FOCUS_PRESETS).find(([, v]) => v.work === c.work && v.brk === c.brk)?.[0];
+  return `<section class="focus-card">
+    <label class="switch-row">
+      <span><b>Focus blocks</b><small>${on ? `${c.work} min focus · ${c.brk} min breaks · ${c.longBrk} min every ${c.every}` : 'Work in blocks with a bell for short breaks'}</small></span>
+      <input type="checkbox" class="switch" id="focus-toggle" data-focus="toggle" ${on ? 'checked' : ''}>
+    </label>
+    ${on ? `
+    <div class="row">${Object.keys(FOCUS_PRESETS).map((k) => `<button type="button" class="chip" data-act="focus-preset" data-v="${k}" aria-pressed="${preset === k && !ui.focusCustom}">${k.replace('/', ' / ')}</button>`).join('')}
+      <button type="button" class="chip" data-act="focus-custom" aria-pressed="${!preset || !!ui.focusCustom}">Custom</button></div>
+    ${!preset || ui.focusCustom ? `<div class="focus-custom">
+      <label>Focus <input class="input" type="number" min="5" max="180" id="focus-work" data-focus="work" value="${c.work}"> min</label>
+      <label>Break <input class="input" type="number" min="1" max="60" id="focus-brk" data-focus="brk" value="${c.brk}"> min</label>
+      <label>Long break <input class="input" type="number" min="1" max="90" id="focus-long" data-focus="longBrk" value="${c.longBrk}"> min every <input class="input" type="number" min="2" max="10" id="focus-every" data-focus="every" value="${c.every}"> blocks</label>
+    </div>` : ''}
+    <label class="check-row"><input type="checkbox" id="focus-auto" data-focus="auto" ${c.auto ? 'checked' : ''}> Start the next block by itself after a break</label>` : ''}
+  </section>`;
+}
+
+// Focus settings are remembered for next time and applied to the timer that's running.
+function focusSetting(el) {
+  const c = focusCfg();
+  const k = el.dataset.focus;
+  if (k === 'toggle') {
+    c.on = el.checked;
+    if (c.on && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+    if (timer && !timer.finished) {
+      if (c.on && !timer.focus) {
+        timer.focus = newFocus();
+        if (!timer.startedAt) { timer.startedAt = Date.now(); timer.focus.blockStart = focusedMs(); }
+      }
+      if (!c.on && timer.focus) {
+        const wasBreak = timer.focus.phase !== 'work';
+        timer.focus = null;
+        if (wasBreak) timer.startedAt = Date.now();
+      }
+    }
+  } else if (k === 'auto') c.auto = el.checked;
+  else {
+    const n = Math.round(Number(el.value));
+    const lim = { work: [5, 180], brk: [1, 60], longBrk: [1, 90], every: [2, 10] }[k];
+    if (!n || !lim) return;
+    c[k] = Math.min(lim[1], Math.max(lim[0], n));
+  }
+  state.settings.focus = c;
+  const f = timer?.focus;
+  if (f && k !== 'toggle') Object.assign(f, { work: c.work, brk: c.brk, longBrk: c.longBrk, every: c.every, auto: c.auto });
+  if (timer) saveTimer(); else persist();
+}
+
+function timerButtons() {
+  const f = timer.focus;
+  if (timer.finished) {
+    return `<p class="lede">How did it go?</p>
+      <div class="row center"><button class="btn btn-primary" data-act="timer-done">Mark it done</button><button class="btn" data-act="timer-close">Not quite, that’s fine</button></div>`;
+  }
+  if (f?.phase === 'break') {
+    return `<div class="row center"><button class="btn btn-primary" data-act="focus-skip">Skip break, keep going</button><button class="btn" data-act="timer-done">Mark done</button><button class="btn" data-act="timer-close">Stop</button></div>`;
+  }
+  if (f?.phase === 'breakover') {
+    return `<div class="row center"><button class="btn btn-primary" data-act="focus-skip">Start the next block</button><button class="btn" data-act="timer-done">Mark done</button><button class="btn" data-act="timer-close">Stop</button></div>`;
+  }
+  return `<div class="row center">
+      <button class="btn btn-quiet" data-act="timer-pause">${timer.startedAt ? 'Pause' : 'Resume'}</button>
+      <button class="btn btn-primary" data-act="timer-done">${timer.reached ? 'Mark done' : 'Finished early'}</button>
+      <button class="btn" data-act="timer-close">Stop</button>
+    </div>`;
+}
+
+function nextChunkToday() {
+  return todayChunks().find(({ c }) => !c.done && c.id !== timer?.id) || null;
+}
+
+function drawTimer() {
+  const el = $('#timer');
+  const bar = $('#timer-bar');
+  if (!timer) { el.hidden = true; bar.hidden = true; return; }
+  const f = timer.focus;
+  const style = tint(timer.kind === 'habit' ? timer.id : findChunk(timer.id).t?.id);
+  const { ms, frac } = face();
+  const onBreak = f?.phase === 'break';
+  const over = f?.phase === 'breakover';
+
+  // the little bar that follows you around the app
+  bar.setAttribute('style', style);
+  bar.innerHTML = `<button class="tb-main" data-act="timer-open"><span class="tb-dot ${timer.startedAt ? 'live' : ''}"></span>
+      <span class="tb-title">${onBreak ? 'Break' : over ? 'Break’s over' : esc(timer.title)}</span><span class="tb-time" id="tb-time">${mmss(ms)}</span></button>
+    ${onBreak || over ? '<button class="btn-text" data-act="focus-skip">Keep going</button>' : `<button class="btn-text" data-act="timer-pause">${timer.startedAt ? 'Pause' : 'Resume'}</button>`}`;
+  bar.hidden = !timer.min;
+
+  const r = 130;
+  const circ = 2 * Math.PI * r;
+  const next = timer.kind === 'chunk' ? nextChunkToday() : null;
+  const eyebrow = timer.finished ? 'Time’s up'
+    : onBreak ? `${f.long ? 'Long break' : 'Break'} · after block ${f.round}`
+      : over ? 'Break’s over'
+        : f ? `${timer.startedAt ? 'Focus' : 'Paused'} · block ${f.round}` : timer.startedAt ? 'Just this bit' : 'Paused';
+  el.setAttribute('style', style);
+  el.innerHTML = `<div class="timer-inner">
+    <div class="timer-top"><button class="icon-btn" data-act="timer-min" aria-label="Minimise the timer">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+    <p class="eyebrow">${eyebrow}</p>
+    <h2>${onBreak ? 'Rest your eyes' : over ? 'Ready when you are' : esc(timer.title)}</h2>
+    <p class="muted">${onBreak ? 'Stand up, stretch, look at something far away, have some water.' : over ? `${esc(timer.title)} is waiting.` : esc(timer.sub)}</p>
+    ${over ? '' : `<div class="timer-ring ${onBreak ? 'on-break' : ''}">
+      <svg viewBox="0 0 280 280" aria-hidden="true">${GRADIENT('g-timer')}
+        <circle class="ticks" cx="140" cy="140" r="${r - 20}" fill="none" stroke-width="10" stroke-dasharray="1.2 5.6"/>
+        <circle class="track" cx="140" cy="140" r="${r}" fill="none" stroke-width="10"/>
+        <circle class="fill" stroke="${onBreak ? 'var(--green)' : 'url(#g-timer)'}" id="timer-fill" cx="140" cy="140" r="${r}" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ * (1 - frac)}"/>
+      </svg>
+      <span class="timer-time ${timer.startedAt || onBreak ? '' : 'paused'}" id="timer-time" role="timer">${mmss(ms)}</span>
+    </div>`}
+    ${f ? `<div class="chunk-progress"><div class="bar"><span id="chunk-bar" style="width:${Math.min(100, (100 * focusedMs()) / (timer.minutes * 60000))}%"></span></div>
+      <p class="small muted"><span id="chunk-line">${chunkLine()}</span>${onBreak ? ' · breaks aren’t counted' : ''}</p></div>` : ''}
+    ${f && timer.reached && !timer.finished ? `<div class="note"><p>That’s this ${timer.kind === 'habit' ? 'habit’s' : 'chunk’s'} ${timer.minutes} minutes. Nicely done.</p>
+      <div class="row"><button class="btn btn-sm btn-primary" data-act="timer-done">Mark done</button>
+      ${next ? `<button class="btn btn-sm" data-act="timer-done-next">Mark done, start the next chunk</button>` : ''}</div></div>` : ''}
+    ${timerButtons()}
+    ${timer.finished ? '' : focusPanel()}
+  </div>`;
+  el.hidden = !!timer.min;
+}
+
 function closeTimer() {
-  if (timer) clearInterval(timer.interval);
+  clearInterval(timerInterval);
+  timerInterval = null;
   timer = null;
-  $('#timer').hidden = true;
+  state.timer = null;
+  persist();
+  drawTimer();
   try { wakeLock?.release(); } catch { /* optional */ }
   wakeLock = null;
+}
+
+function markTimerDone() {
+  if (timer.kind === 'habit') {
+    const h = state.habits.find((x) => x.id === timer.id);
+    if (h) { h.log = h.log || {}; h.log[today] = true; }
+  } else {
+    const { c } = findChunk(timer.id);
+    if (c) { c.done = true; c.doneOn = today; c.date = today; }
+  }
+}
+
+// After a restart: pick the timer up where it was, unless its chunk or habit has gone.
+function restoreTimer() {
+  const t = state.timer;
+  if (!t) return;
+  const exists = t.kind === 'habit' ? state.habits.some((h) => h.id === t.id) : findChunk(t.id).c && !findChunk(t.id).c.done;
+  if (!exists) { state.timer = null; persist(); return; }
+  timer = t;
+  keepAwake();
+  tickTimer();
+  drawTimer();
 }
 
 // ---------- Calendar ----------
@@ -805,26 +1066,45 @@ const actions = {
     startTimer({ id: h.id, kind: 'habit', title: h.name, sub: 'Habit', minutes: h.minutes });
   },
   'timer-pause'() {
-    if (timer.pausedLeft != null) { timer.endAt = Date.now() + timer.pausedLeft * 1000; timer.pausedLeft = null; }
-    else timer.pausedLeft = secondsLeft();
+    if (timer.startedAt) { timer.elapsed += Date.now() - timer.startedAt; timer.startedAt = null; }
+    else timer.startedAt = Date.now();
+    saveTimer();
     drawTimer();
   },
   'timer-done'() {
-    const { id, kind } = timer;
+    markTimerDone();
     closeTimer();
-    if (kind === 'habit') {
-      const h = state.habits.find((x) => x.id === id);
-      h.log = h.log || {};
-      h.log[today] = true;
-    } else {
-      const { c } = findChunk(id);
-      if (c) { c.done = true; c.doneOn = today; c.date = today; }
-    }
-    persist();
     toast(WARM[Math.floor(Math.random() * WARM.length)]);
     render();
   },
+  // keep the focus session going on the next of today's chunks
+  'timer-done-next'() {
+    const next = nextChunkToday();
+    const f = timer.focus;
+    markTimerDone();
+    if (!next) { closeTimer(); toast('That was the last one for today. Lovely work.'); render(); return; }
+    let carry = null;
+    if (f) {
+      carry = { ...f };
+      if (f.phase === 'work') carry.blockStart = -(focusedMs() - f.blockStart); // the block carries on where it was
+    }
+    const wasRunning = !!timer.startedAt;
+    startTimer({ id: next.c.id, kind: 'chunk', title: next.t.name, sub: chunkLabel(next.t, next.c), minutes: next.c.minutes }, carry);
+    if (carry && carry.phase !== 'work' || !wasRunning) { timer.startedAt = null; saveTimer(); drawTimer(); }
+    toast('Done. On to the next one.');
+    render();
+  },
   'timer-close'() { closeTimer(); },
+  'timer-min'() { timer.min = true; saveTimer(); drawTimer(); },
+  'timer-open'() { timer.min = false; saveTimer(); drawTimer(); $('#timer').scrollTop = 0; },
+  'focus-skip'() { startNextBlock(); },
+  'focus-preset'(el) {
+    const p = FOCUS_PRESETS[el.dataset.v];
+    ui.focusCustom = false;
+    for (const [k, v] of [['work', p.work], ['brk', p.brk]]) focusSetting({ dataset: { focus: k }, value: v });
+    redrawFocus();
+  },
+  'focus-custom'() { ui.focusCustom = true; redrawFocus(); },
   'dismiss-notice'() { state.notice = null; persist(); render(); },
   'seed-audit'() {
     ui.drafts = [newDraft({ name: 'Audits at work, nearest deadline first', minutes: 120, chunkSize: 30 })];
@@ -990,12 +1270,13 @@ document.addEventListener('change', (e) => {
   if (draft && (el.name === 'deadline' || el.name === 'minutes')) { render(); return; }
   if (el.dataset.pref === 'dailyLimit') { setPref('dailyLimit', +el.value); toast('Daily limit saved. The plan has been rebalanced.'); }
   if (el.dataset.pref === 'aiKey') { setPref('aiKey', el.value.trim(), false); toast(el.value.trim() ? 'Key saved on this phone.' : 'Key removed.'); }
+  if (el.dataset.focus) { focusSetting(el); redrawFocus(); return; }
   if (el.dataset.slot && el.value) { state.settings.slotTimes[el.dataset.slot] = el.value; persist(); }
 });
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (timer) closeTimer();
+  if (timer && !timer.min) { timer.min = true; saveTimer(); drawTimer(); }
   else if (!$('#sheet').hidden) closeSheet();
 });
 
@@ -1012,6 +1293,7 @@ setInterval(() => { if (dayCheck()) render(); }, 60000);
 applyTheme();
 dayCheck();
 render();
+restoreTimer();
 
 Cloud.init({
   getState: () => state,

@@ -1,5 +1,5 @@
 // Keeps the app working offline. Bump VERSION when files change so phones pick up the update.
-const VERSION = 'chunker-v3';
+const VERSION = 'chunker-v4';
 const FILES = [
   './', './index.html', './css/styles.css', './manifest.webmanifest',
   './js/app.js', './js/dates.js', './js/store.js', './js/scheduler.js', './js/parser.js', './js/ics.js', './js/ai.js', './js/cloud.js', './js/cloud-config.js', './js/sync-merge.js',
